@@ -29,13 +29,13 @@ UWF_OFFSET_WRITE_OFFSET = 4
 UWF_OFFSET_WRITE_FLAGS = 8
 
 UWF_WRITE_BLOCK_HDR_LENGTH = 8
-UWF_WRITE_BLOCK_SIZE = 128
 
 RESPONSE_ATS_SIZE = 14
 RESPONSE_ACKNOWLEDGE = 'a'
 RESPONSE_ERROR = 'f'
 RESPONSE_ACKNOWLEDGE_SIZE = 1
 
+ERROR_BOOTLOADER = 'enter_bootloader: {}\n'
 ERROR_TARGET_PLATFORM = 'process_command_target_platform: {}\n'
 ERROR_REGISTER_DEVICE = 'process_command_register_device: {}\n'
 ERROR_ERASE_BLOCKS = 'process_command_erase_blocks: {}\n'
@@ -43,12 +43,19 @@ ERROR_WRITE_BLOCKS = 'process_command_write_blocks: {}\n'
 
 def init_processor(type, port, baudrate):
 	"""
-	Instantiates and returns the requested processor or None if the 
-	requested type is not supported
+	Instantiates and returns the requested processor
 	"""
-	processor = None
 	if type == DEVICE_TYPE_IG60:
+		# Import the IG60 custom processor
+		from ig60_bl654_uwf_processor import Ig60Bl654UwfProcessor
+
+		# Initialize the IG60 BL654 processor
 		processor = Ig60Bl654UwfProcessor(port, baudrate)
+	else:
+		# Use the generic processor
+		processor = UwfProcessor(port, baudrate)
+
+	processor.enter_bootloader()
 
 	return processor
 
@@ -65,81 +72,32 @@ class UwfProcessor():
 		self.sectors = 0
 		self.sector_size = 0
 
+		# Number of bytes of data to write for each write command
+		self.write_block_size = 128
+
+		# The number of data blocks writes to perform before verifying
+		self.verify_write_limit = 8
+
 		# Open the COM port to the Bluetooth adapter
 		self.ser = serial.Serial(port, baudrate, timeout=SERIAL_TIMEOUT_SEC)
-
-		# Enter the bootloader
-		port_cmd_bytes = bytearray(COMMAND_ENTER_BOOTLOADER, 'utf-8')
-		self.ser.write(port_cmd_bytes)
-
-		# Clear any response returned by the module
-		self.ser.read()
 
 	def write_to_comm(self, data, resp_size):
 		self.ser.write(data)
 		return self.ser.read(resp_size)
 
-	def process_command_target_platform(self, file, data_length):
-		return ERROR_TARGET_PLATFORM.format('Not implemented')
+	def enter_bootloader(self):
+		result = True
 
-	def process_command_register_device(self, file, data_length):
-		register_device_data = file.read(data_length)
-		self.handle = struct.unpack('B', register_device_data[:UWF_OFFSET_HANDLE])[0]
-		self.base_address = struct.unpack('<I', register_device_data[UWF_OFFSET_HANDLE:UWF_OFFSET_BASE_ADDRESS])[0]
-		self.num_banks = struct.unpack('B', register_device_data[UWF_OFFSET_BASE_ADDRESS:UWF_OFFSET_NUM_BANKS])[0]
-		self.bank_size = struct.unpack('<I', register_device_data[UWF_OFFSET_NUM_BANKS:UWF_OFFSET_BANK_SIZE])[0]
-		self.bank_algo = struct.unpack('B', register_device_data[UWF_OFFSET_BANK_SIZE:UWF_OFFSET_BANK_ALGO])[0]
-
-		return None
-
-	def process_command_select_device(self, file, data_length):
-		select_device_data = file.read(data_length)
-		self.selected_handle = struct.unpack('B', select_device_data[:UWF_OFFSET_HANDLE])[0]
-		self.selected_bank = struct.unpack('B', select_device_data[UWF_OFFSET_HANDLE:UWF_OFFSET_BANK])[0]
-
-		return None
-
-	def process_command_sector_map(self, file, data_length):
-		sector_map_data = file.read(data_length)
-		self.sectors = struct.unpack('<I', sector_map_data[:UWF_OFFSET_SECTORS])[0]
-		self.sector_size = struct.unpack('<I', sector_map_data[UWF_OFFSET_SECTORS:UWF_OFFSET_SECTOR_SIZE])[0]
-
-		return None
-
-	def process_command_erase_blocks(self, file, data_length):
-		return ERROR_ERASE_BLOCKS.format('Not implemented')
-
-	def process_command_write_blocks(self, file, data_length):
-		return ERROR_WRITE_BLOCKS.format('Not implemented')
-
-	def process_command_unregister(self, file, data_length):
-		unregister_device_data = file.read(data_length)
-
-		return None
-
-	def process_reboot(self):
-		port_cmd_bytes = bytearray(COMMAND_REBOOT_BOOTLOADER, 'utf-8')
+		# Send the bootloader command via smartBasic
+		port_cmd_bytes = bytearray(COMMAND_ENTER_BOOTLOADER, 'utf-8')
 		self.ser.write(port_cmd_bytes)
 
-		# Cleanup
-		self.ser.close()
+		# Verify no error
+		response = self.ser.readline()
+		if len(response) != 0:
+			result = False
 
-
-class Ig60Bl654UwfProcessor(UwfProcessor):
-	"""
-	Class that encapsulates how to process UWF commands for an IG60
-	BL654 module upgrade
-	"""
-	def __init__(self, port, baudrate):
-		UwfProcessor.__init__(self, port, baudrate)
-
-		# The number of data blocks writes to perform before verifying
-		self.verify_write_limit = 8
-
-		# Expected registration values for an IG60 BL654
-		self.expected_handle = 0
-		self.expected_num_banks = 1
-		self.expected_bank_algo = 1
+		return result
 
 	def process_command_target_platform(self, file, data_length):
 		error = None
@@ -169,30 +127,40 @@ class Ig60Bl654UwfProcessor(UwfProcessor):
 			else:
 				error = ERROR_TARGET_PLATFORM.format('Non-ack or error in ATS acknowledge response')
 		else:
-			error = ERROR_TARGET_PLATFORM.format('Invalid ATS response')
+			error = ERROR_TARGET_PLATFORM.format('Failed to sync with the bootloader')
 
 		return error
 
 	def process_command_register_device(self, file, data_length):
-		error = None
+		register_device_data = file.read(data_length)
+		self.handle = struct.unpack('B', register_device_data[:UWF_OFFSET_HANDLE])[0]
+		self.base_address = struct.unpack('<I', register_device_data[UWF_OFFSET_HANDLE:UWF_OFFSET_BASE_ADDRESS])[0]
+		self.num_banks = struct.unpack('B', register_device_data[UWF_OFFSET_BASE_ADDRESS:UWF_OFFSET_NUM_BANKS])[0]
+		self.bank_size = struct.unpack('<I', register_device_data[UWF_OFFSET_NUM_BANKS:UWF_OFFSET_BANK_SIZE])[0]
+		self.bank_algo = struct.unpack('B', register_device_data[UWF_OFFSET_BANK_SIZE:UWF_OFFSET_BANK_ALGO])[0]
 
-		UwfProcessor.process_command_register_device(self, file, data_length)
+		self.registered = True
 
-		# Validate the registration data
-		if self.handle == self.expected_handle and self.num_banks == self.expected_num_banks and self.bank_size > 0 and self.bank_algo == self.expected_bank_algo:
-			self.registered = True
-		else:
-			error = ERROR_REGISTER_DEVICE.format('Unexpected registration data')
-
-		return error
+		return None
 
 	def process_command_select_device(self, file, data_length):
-		return UwfProcessor.process_command_select_device(self, file, data_length)
+		select_device_data = file.read(data_length)
+		self.selected_handle = struct.unpack('B', select_device_data[:UWF_OFFSET_HANDLE])[0]
+		self.selected_bank = struct.unpack('B', select_device_data[UWF_OFFSET_HANDLE:UWF_OFFSET_BANK])[0]
+
+		return None
 
 	def process_command_sector_map(self, file, data_length):
-		return UwfProcessor.process_command_sector_map(self, file, data_length)
+		sector_map_data = file.read(data_length)
+		self.sectors = struct.unpack('<I', sector_map_data[:UWF_OFFSET_SECTORS])[0]
+		self.sector_size = struct.unpack('<I', sector_map_data[UWF_OFFSET_SECTORS:UWF_OFFSET_SECTOR_SIZE])[0]
+
+		return None
 
 	def process_command_erase_blocks(self, file, data_length):
+		"""
+		Erases blocks according to the sector size value from the the UWF file
+		"""
 		error = None
 
 		if self.synchronized and self.registered and self.sectors > 0 and self.sector_size > 0:
@@ -224,6 +192,10 @@ class Ig60Bl654UwfProcessor(UwfProcessor):
 		return error
 
 	def process_command_write_blocks(self, file, data_length):
+		"""
+		Sends the write command, then a data block 'X' times, then verifies
+		The size of the data block and the number of data blocks before verification are configurable
+		"""
 		error = None
 
 		if self.erased:
@@ -241,11 +213,11 @@ class Ig60Bl654UwfProcessor(UwfProcessor):
 			if remaining_data_size < self.bank_size:
 				verify_start_addr = struct.pack('<I', offset)
 				while remaining_data_size > 0:
-					if remaining_data_size < UWF_WRITE_BLOCK_SIZE:
+					if remaining_data_size < self.write_block_size:
 						bytes_to_write = remaining_data_size
 						last_write = True
 					else:
-						bytes_to_write = UWF_WRITE_BLOCK_SIZE
+						bytes_to_write = self.write_block_size
 
 					# Send the write command
 					write_command = bytearray(COMMAND_WRITE_SECTOR, 'utf-8')
@@ -317,4 +289,13 @@ class Ig60Bl654UwfProcessor(UwfProcessor):
 		return error
 
 	def process_command_unregister(self, file, data_length):
-		return UwfProcessor.process_command_unregister(self, file, data_length)
+		unregister_device_data = file.read(data_length)
+
+		return None
+
+	def process_reboot(self):
+		port_cmd_bytes = bytearray(COMMAND_REBOOT_BOOTLOADER, 'utf-8')
+		self.ser.write(port_cmd_bytes)
+
+		# Cleanup
+		self.ser.close()
