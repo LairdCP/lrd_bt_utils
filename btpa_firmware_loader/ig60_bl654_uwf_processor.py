@@ -38,9 +38,6 @@ class Ig60Bl654UwfProcessor(UwfProcessor):
 
 		return success
 
-	def process_command_target_platform(self, file, data_length):
-		return UwfProcessor.process_command_target_platform(self, file, data_length)
-
 	def process_command_register_device(self, file, data_length):
 		error = None
 
@@ -54,21 +51,6 @@ class Ig60Bl654UwfProcessor(UwfProcessor):
 			self.registered = False
 
 		return error
-
-	def process_command_select_device(self, file, data_length):
-		return UwfProcessor.process_command_select_device(self, file, data_length)
-
-	def process_command_sector_map(self, file, data_length):
-		return UwfProcessor.process_command_sector_map(self, file, data_length)
-
-	def process_command_erase_blocks(self, file, data_length):
-		return UwfProcessor.process_command_erase_blocks(self, file, data_length)
-
-	def process_command_write_blocks(self, file, data_length):
-		return UwfProcessor.process_command_write_blocks(self, file, data_length)
-
-	def process_command_unregister(self, file, data_length):
-		return UwfProcessor.process_command_unregister(self, file, data_length)
 
 	def process_reboot(self):
 		# Use the device service to return the bt_boot_mode to smartBASIC
