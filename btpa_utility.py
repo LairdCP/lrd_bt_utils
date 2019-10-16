@@ -1,7 +1,9 @@
+#!/usr/bin/python3
 import sys
 import serial
 import binascii
 import errno
+import time
 
 SERIAL_TIMEOUT = 1
 MAX_UPLOAD_SIZE = 32
@@ -49,6 +51,11 @@ if len(sys.argv) >= 4:
 
 	# Open the COM port to the Bluetooth adapter
 	ser = serial.Serial(port, baudrate, timeout=SERIAL_TIMEOUT)
+
+	# Send break, flush the input, delay for BL654 reset
+	ser.send_break()
+	ser.reset_input_buffer()
+	time.sleep(3)
 
 	# Execute the given command
 	if cmd == 'upload':
