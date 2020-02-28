@@ -154,6 +154,11 @@ if len(sys.argv) >= 4:
 			exit_code = write_to_comm(ser, port_cmd_bytes)
 		else:
 			print('usage: btpa_utility <port> <baudrate> rename <current filename> <new filename>')
+	elif cmd == 'cmd':
+		if len(sys.argv) == 5:
+			at_cmd = '{}\r\n'.format(sys.argv[4])
+			at_cmd_bytes = bytearray(at_cmd, 'utf-8')
+			exit_code = write_to_comm(ser, at_cmd_bytes)
 	else:
 		print('Invalid command: {}'.format(cmd))
 else:
