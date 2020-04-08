@@ -6,14 +6,12 @@ DEVICE_TYPE_IG60 = 'IG60'
 
 SERIAL_TIMEOUT_SEC = 3
 
-COMMAND_ENTER_BOOTLOADER = 'AT+FUP\r'
 COMMAND_SYNC_WITH_BOOTLOADER = '80'
 COMMAND_PLATFORM_CHECK = 'p'
 COMMAND_ERASE_SECTOR = 'e'
 COMMAND_WRITE_SECTOR = 'w'
 COMMAND_DATA_SECTION = 'd'
 COMMAND_VERIFY_DATA = 'v'
-COMMAND_REBOOT_BOOTLOADER = 'z'
 
 UWF_OFFSET_HANDLE = 1
 UWF_OFFSET_BANK = 2
@@ -40,6 +38,13 @@ ERROR_TARGET_PLATFORM = 'process_command_target_platform: {}\n'
 ERROR_REGISTER_DEVICE = 'process_command_register_device: {}\n'
 ERROR_ERASE_BLOCKS = 'process_command_erase_blocks: {}\n'
 ERROR_WRITE_BLOCKS = 'process_command_write_blocks: {}\n'
+
+GPIO_BASE_PATH = '/sys/devices/platform/gpio/'
+GPIO_CARD_NRESET = 'card_nreset'
+GPIO_BT_BOOT_MODE = 'bt_boot_mode'
+
+BT_BOOTLOADER_MODE = 0
+BT_FIRMWARE_MODE = 1
 
 def init_processor(type, port, baudrate):
 	"""
@@ -85,19 +90,17 @@ class UwfProcessor():
 		self.ser.write(data)
 		return self.ser.read(resp_size)
 
+	def set_gpio_value(self, gpio_name, value):
+		with open(GPIO_BASE_PATH + gpio_name + '/value', 'w') as f:
+			f.write('%d' % int(value))
+
 	def enter_bootloader(self):
-		result = True
-
-		# Send the bootloader command via smartBasic
-		port_cmd_bytes = bytearray(COMMAND_ENTER_BOOTLOADER, 'utf-8')
-		self.ser.write(port_cmd_bytes)
-
-		# Verify no error
-		response = self.ser.readline()
-		if len(response) != 0:
-			result = False
-
-		return result
+		self.set_gpio_value(GPIO_BT_BOOT_MODE, BT_BOOTLOADER_MODE)
+		self.set_gpio_value(GPIO_CARD_NRESET, 0)
+		self.set_gpio_value(GPIO_CARD_NRESET, 1)
+                # Clear the serial line before starting
+		self.ser.readline()
+		return True
 
 	def process_command_target_platform(self, file, data_length):
 		error = None
@@ -294,8 +297,9 @@ class UwfProcessor():
 		return None
 
 	def process_reboot(self):
-		port_cmd_bytes = bytearray(COMMAND_REBOOT_BOOTLOADER, 'utf-8')
-		self.ser.write(port_cmd_bytes)
+		self.set_gpio_value(GPIO_BT_BOOT_MODE, BT_FIRMWARE_MODE)
+		self.set_gpio_value(GPIO_CARD_NRESET, 0)
+		self.set_gpio_value(GPIO_CARD_NRESET, 1)
 
 		# Cleanup
 		self.ser.close()
