@@ -12,6 +12,8 @@ COMMAND_ERASE_SECTOR = 'e'
 COMMAND_WRITE_SECTOR = 'w'
 COMMAND_DATA_SECTION = 'd'
 COMMAND_VERIFY_DATA = 'v'
+COMMAND_SETTINGS_SET = 's'
+COMMAND_BOOTLOADER_VERSION = 'V'
 
 UWF_OFFSET_HANDLE = 1
 UWF_OFFSET_BANK = 2
@@ -28,6 +30,8 @@ UWF_OFFSET_WRITE_FLAGS = 8
 
 UWF_WRITE_BLOCK_HDR_LENGTH = 8
 
+RESPONSE_SET_SIZE = 4
+RESPONSE_VERSION_SIZE = 6
 RESPONSE_ATS_SIZE = 14
 RESPONSE_ACKNOWLEDGE = 'a'
 RESPONSE_ERROR = 'f'
@@ -45,6 +49,13 @@ GPIO_BT_BOOT_MODE = 'bt_boot_mode'
 
 BT_BOOTLOADER_MODE = 0
 BT_FIRMWARE_MODE = 1
+
+FUP_OPTION_CURRENT_ERASE_LEN_BYTES = 0x0000
+FUP_OPTION_CURRENT_WRITE_LEN_BYTES = 0x0002
+FUP_OPTION_CURRENT_BAUDRATE = 0x0005
+
+#Version numbed used to differentiate legacy and enhanced bootloaders
+FUP_EXTENDED_VERSION_NUMBER = 6
 
 def init_processor(type, port, baudrate):
 	"""
@@ -76,9 +87,14 @@ class UwfProcessor():
 		self.write_complete = False
 		self.sectors = 0
 		self.sector_size = 0
+		self.port = port
+		self.enhanced_mode = False
 
 		# Number of bytes of data to write for each write command
-		self.write_block_size = 128
+		self.write_block_size = 252
+
+		# Number of bytes of data to erase for each erase command
+		self.erase_block_size = 65536
 
 		# The number of data blocks writes to perform before verifying
 		self.verify_write_limit = 8
@@ -89,6 +105,9 @@ class UwfProcessor():
 	def write_to_comm(self, data, resp_size):
 		self.ser.write(data)
 		return self.ser.read(resp_size)
+
+	def port_close(self):
+		self.ser.close()
 
 	def set_gpio_value(self, gpio_name, value):
 		with open(GPIO_BASE_PATH + gpio_name + '/value', 'w') as f:
@@ -101,6 +120,36 @@ class UwfProcessor():
                 # Clear the serial line before starting
 		self.ser.readline()
 		return True
+
+	def process_setting_set(self, fup_option, set_value):
+		command = bytearray(COMMAND_SETTINGS_SET, 'utf-8')
+		command.append(fup_option & 0xff)
+		command.append((fup_option & 0xff00) >> 8)
+		command.append(set_value & 0xff)
+		command.append(0x00)
+		command.append(0x00)
+		command.append(0x00)
+		response = self.write_to_comm(command, RESPONSE_SET_SIZE)
+		return response
+
+	def process_bootloader_version(self):
+		version_command = bytearray(COMMAND_BOOTLOADER_VERSION, 'utf-8')
+		response = self.write_to_comm(version_command, RESPONSE_VERSION_SIZE)
+		return response
+
+	def enhanced_mode_check(self):
+		version = self.process_bootloader_version()
+		version = version.split('.',1)[0][1:]
+		if int(version) >= FUP_EXTENDED_VERSION_NUMBER:
+			self.enhanced_mode = True
+			self.write_block_size = 8192
+			self.process_setting_set(FUP_OPTION_CURRENT_BAUDRATE, 0xa)
+			self.port_close()
+			self.ser = serial.Serial(self.port, 1000000, timeout=SERIAL_TIMEOUT_SEC)
+			self.process_setting_set(FUP_OPTION_CURRENT_WRITE_LEN_BYTES, 0x2)
+			self.process_setting_set(FUP_OPTION_CURRENT_ERASE_LEN_BYTES, 0x2)
+		else:
+			self.enhanced_mode = False
 
 	def process_command_target_platform(self, file, data_length):
 		error = None
@@ -131,6 +180,8 @@ class UwfProcessor():
 				error = ERROR_TARGET_PLATFORM.format('Non-ack or error in ATS acknowledge response')
 		else:
 			error = ERROR_TARGET_PLATFORM.format('Failed to sync with the bootloader')
+
+		self.enhanced_mode_check()
 
 		return error
 
@@ -176,15 +227,21 @@ class UwfProcessor():
 				erase_command = bytearray(COMMAND_ERASE_SECTOR, 'utf-8')
 				while size > 0:
 					erase_sector = struct.pack('<I', start)
-					port_cmd_bytes = erase_command + erase_sector
+					if self.enhanced_mode:
+						erase_block_size = struct.pack('<I',0x2)
+						port_cmd_bytes = erase_command + erase_sector + erase_block_size
+					else:
+						port_cmd_bytes = erase_command + erase_sector
 					response = self.write_to_comm(port_cmd_bytes, RESPONSE_ACKNOWLEDGE_SIZE)
-
 					if response.decode('utf-8') != RESPONSE_ACKNOWLEDGE:
 						error = ERROR_ERASE_BLOCKS.format('Non-ack to erase command')
 						break
-
-					start += self.sector_size
-					size -= self.sector_size
+					if self.enhanced_mode:
+						start += self.erase_block_size
+						size -= self.erase_block_size
+					else:
+						start += self.sector_size
+						size -= self.sector_size
 				else:
 					self.erased = True
 			else:
@@ -225,8 +282,13 @@ class UwfProcessor():
 					# Send the write command
 					write_command = bytearray(COMMAND_WRITE_SECTOR, 'utf-8')
 					start_addr = struct.pack('<I', offset)
-					data_block_size = struct.pack('B', bytes_to_write)
-					port_cmd_bytes = write_command + start_addr + data_block_size
+					if self.enhanced_mode:
+						data_block_size_l = struct.pack('B', bytes_to_write & 0xff)
+						data_block_size_h = struct.pack('B', (bytes_to_write & 0xff00) >> 8)
+						port_cmd_bytes = write_command + start_addr + data_block_size_l + data_block_size_h
+					else:
+						data_block_size = struct.pack('B', bytes_to_write)
+						port_cmd_bytes = write_command + start_addr + data_block_size
 					response = self.write_to_comm(port_cmd_bytes, RESPONSE_ACKNOWLEDGE_SIZE)
 
 					if response.decode('utf-8') == RESPONSE_ACKNOWLEDGE:
