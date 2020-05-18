@@ -50,7 +50,6 @@ GPIO_BT_BOOT_MODE = 'bt_boot_mode'
 BT_BOOTLOADER_MODE = 0
 BT_FIRMWARE_MODE = 1
 
-FUP_OPTION_CURRENT_ERASE_LEN_BYTES = 0x0000
 FUP_OPTION_CURRENT_WRITE_LEN_BYTES = 0x0002
 FUP_OPTION_CURRENT_BAUDRATE = 0x0005
 
@@ -92,9 +91,6 @@ class UwfProcessor():
 
 		# Number of bytes of data to write for each write command
 		self.write_block_size = 252
-
-		# Number of bytes of data to erase for each erase command
-		self.erase_block_size = 65536
 
 		# The number of data blocks writes to perform before verifying
 		self.verify_write_limit = 8
@@ -147,7 +143,6 @@ class UwfProcessor():
 			self.port_close()
 			self.ser = serial.Serial(self.port, 1000000, timeout=SERIAL_TIMEOUT_SEC)
 			self.process_setting_set(FUP_OPTION_CURRENT_WRITE_LEN_BYTES, 0x2)
-			self.process_setting_set(FUP_OPTION_CURRENT_ERASE_LEN_BYTES, 0x2)
 		else:
 			self.enhanced_mode = False
 
@@ -227,21 +222,14 @@ class UwfProcessor():
 				erase_command = bytearray(COMMAND_ERASE_SECTOR, 'utf-8')
 				while size > 0:
 					erase_sector = struct.pack('<I', start)
-					if self.enhanced_mode:
-						erase_block_size = struct.pack('<I',0x2)
-						port_cmd_bytes = erase_command + erase_sector + erase_block_size
-					else:
-						port_cmd_bytes = erase_command + erase_sector
+					port_cmd_bytes = erase_command + erase_sector
 					response = self.write_to_comm(port_cmd_bytes, RESPONSE_ACKNOWLEDGE_SIZE)
+
 					if response.decode('utf-8') != RESPONSE_ACKNOWLEDGE:
 						error = ERROR_ERASE_BLOCKS.format('Non-ack to erase command')
 						break
-					if self.enhanced_mode:
-						start += self.erase_block_size
-						size -= self.erase_block_size
-					else:
-						start += self.sector_size
-						size -= self.sector_size
+					start += self.sector_size
+					size -= self.sector_size
 				else:
 					self.erased = True
 			else:
