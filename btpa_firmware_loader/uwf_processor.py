@@ -139,7 +139,7 @@ class UwfProcessor():
 
 	def enhanced_mode_check(self):
 		version = self.process_bootloader_version()
-		version = version.split('.',1)[0][1:]
+		version = version.decode('utf-8').split('.',1)[0][1:]
 		if int(version) >= FUP_EXTENDED_VERSION_NUMBER:
 			self.enhanced_mode = True
 			self.write_block_size = 8192
