@@ -32,7 +32,6 @@ class Ig60Bl654UwfProcessor(UwfProcessor):
 		self.expected_handle = 0
 		self.expected_num_banks = 1
 		self.expected_bank_algo = 1
-		self.erase_block_size = 0x10000
 
 	def enter_bootloader(self):
 		success = False
@@ -64,13 +63,12 @@ class Ig60Bl654UwfProcessor(UwfProcessor):
 
 	def process_command_erase_blocks(self, file, data_length):
 		"""
-		In legacy bootloader mode, erase block according to the sector size value from the the UWF file
-		In enhanced bootloader mode, erase block size is 64K
+		In enhanced bootloader mode, if total erase size is factor of 64k, erase block size is 64k
+		Else, erase block according to the sector size value from the the UWF file
 		"""
 		error = None
-
-		if self.enhanced_mode:
-			UwfProcessor.process_setting_set(self, FUP_OPTION_CURRENT_ERASE_LEN_BYTES, 0x2)
+		erase_mode_64k = False
+		erase_block_64k = 0x10000
 
 		if self.synchronized and self.registered and self.sectors > 0 and self.sector_size > 0:
 			# Get the UWF erase data
@@ -78,11 +76,16 @@ class Ig60Bl654UwfProcessor(UwfProcessor):
 			start = self.base_address + struct.unpack('<I', erase_data[:UWF_OFFSET_ERASE_START_ADDR])[0]
 			size = struct.unpack('<I', erase_data[UWF_OFFSET_ERASE_START_ADDR:UWF_OFFSET_ERASE_SIZE])[0]
 
+			# Check if 64k erase block size can be used
+			if self.enhanced_mode and (size % erase_block_64k == 0):
+				UwfProcessor.process_setting_set(self, FUP_OPTION_CURRENT_ERASE_LEN_BYTES, 0x2)
+				erase_mode_64k = True
+
 			if size < self.bank_size:
 				erase_command = bytearray(COMMAND_ERASE_SECTOR, 'utf-8')
 				while size > 0:
 					erase_sector = struct.pack('<I', start)
-					if self.enhanced_mode:
+					if erase_mode_64k:
 						erase_block_size = struct.pack('<I',0x2)
 						port_cmd_bytes = erase_command + erase_sector + erase_block_size
 					else:
@@ -91,9 +94,9 @@ class Ig60Bl654UwfProcessor(UwfProcessor):
 					if response.decode('utf-8') != RESPONSE_ACKNOWLEDGE:
 						error = ERROR_ERASE_BLOCKS.format('Non-ack to erase command')
 						break
-					if self.enhanced_mode:
-						start += self.erase_block_size
-						size -= self.erase_block_size
+					if erase_mode_64k:
+						start += erase_block_64k
+						size -= erase_block_64k
 					else:
 						start += self.sector_size
 						size -= self.sector_size
